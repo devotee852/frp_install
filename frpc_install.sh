@@ -15,6 +15,15 @@ SERVICE_NAME="frpc"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 MANAGER_FILE="/usr/local/bin/frpc_manager"
 
+# 创建必要目录（如果不存在）
+for dir in "$INSTALL_DIR" "$BIN_DIR" "$CONFIG_DIR" "$(dirname "$SERVICE_FILE")" "$(dirname "$MANAGER_FILE")"; do
+    if [ ! -d "$dir" ]; then
+        echo "创建目录: $dir"
+        mkdir -p "$dir"
+        [ $? -ne 0 ] && echo "错误: 创建目录失败 $dir" >&2 && exit 1
+    fi
+done
+
 # 颜色定义
 RED='\033[0;31m'
 GREEN='\033[0;32m'
