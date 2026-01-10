@@ -1,10 +1,19 @@
 #!/bin/bash
 
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
 # 检查root权限
-if [ "$(id -u)" != "0" ]; then
-    echo "错误：此脚本必须使用root权限运行！" >&2
-    exit 1
-fi
+check_root() {
+    if [ "$(id -u)" != "0" ]; then
+        echo -e "${RED}错误：必须使用root权限运行此脚本！${NC}" >&2
+        exit 1
+    fi
+}
 
 # 识别系统类型
 detect_os() {
@@ -61,281 +70,362 @@ detect_arch() {
     echo -e "${BLUE}系统架构: $ARCH -> frp架构: $FRP_ARCH${NC}"
 }
 
-# 系统检测
-if [ -f /etc/redhat-release ]; then
-    SYSTEM="centos"
-elif [ -f /etc/debian_version ]; then
-    SYSTEM="debian"
-else
-    echo "错误：不支持的操作系统！" >&2
-    exit 1
-fi
+# 安装依赖
+install_dependencies() {
+    echo -e "${YELLOW}正在安装依赖...${NC}"
+    
+    case $OS in
+        debian|ubuntu|raspbian)
+            apt-get update
+            apt-get install -y wget tar
+            ;;
+        centos|rhel|fedora|rocky|almalinux)
+            if command -v dnf >/dev/null 2>&1; then
+                dnf install -y wget tar
+            elif command -v yum >/dev/null 2>&1; then
+                yum install -y wget tar
+            fi
+            ;;
+        arch|manjaro)
+            pacman -Syu --noconfirm wget tar
+            ;;
+        alpine)
+            apk add wget tar
+            ;;
+        *)
+            echo -e "${YELLOW}未知系统，尝试安装wget和tar...${NC}"
+            if command -v apt-get >/dev/null 2>&1; then
+                apt-get install -y wget tar
+            elif command -v yum >/dev/null 2>&1; then
+                yum install -y wget tar
+            fi
+            ;;
+    esac
+}
 
-# 安装必要工具
-if [ "$SYSTEM" = "centos" ]; then
-    yum install -y wget tar
-else
-    apt-get update
-    apt-get install -y wget tar
-fi
+# 下载并安装frp
+install_frp() {
+    FRP_VERSION="0.43.0"
+    FRP_URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz"
+    
+    echo -e "${YELLOW}正在下载 frp v${FRP_VERSION} for ${FRP_ARCH}...${NC}"
+    
+    # 创建目录
+    mkdir -p /etc/frp /var/log/frp /usr/local/frp
+    
+    # 下载frp
+    if wget -O /tmp/frp.tar.gz "$FRP_URL"; then
+        echo -e "${GREEN}下载成功！${NC}"
+    else
+        echo -e "${RED}下载失败，请检查网络和架构支持！${NC}"
+        
+        # 尝试备用下载
+        echo -e "${YELLOW}尝试备用下载源...${NC}"
+        FRP_URL="https://cdn.jsdelivr.net/gh/fatedier/frp@v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz"
+        if ! wget -O /tmp/frp.tar.gz "$FRP_URL"; then
+            echo -e "${RED}备用下载也失败，请手动下载并安装${NC}"
+            exit 1
+        fi
+    fi
+    
+    # 解压文件
+    echo -e "${YELLOW}正在解压文件...${NC}"
+    tar -zxvf /tmp/frp.tar.gz -C /usr/local/frp --strip-components=1
+    
+    # 复制二进制文件
+    if [ -f /usr/local/frp/frps ]; then
+        cp /usr/local/frp/frps /usr/local/bin/
+        chmod +x /usr/local/bin/frps
+        echo -e "${GREEN}frps 安装完成${NC}"
+    else
+        echo -e "${RED}frps 文件不存在，解压可能失败！${NC}"
+        exit 1
+    fi
+}
 
-# 下载和解压Frp
-VERSION="0.43.0"
-#URL="https://github.com/fatedier/frp/releases/download/v${VERSION}/frp_${VERSION}_linux_amd64.tar.gz"
-
-URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz"
-
-TMP_DIR=$(mktemp -d)
-wget -qO "$TMP_DIR/frp.tar.gz" "$URL"
-tar xzf "$TMP_DIR/frp.tar.gz" -C "$TMP_DIR"
-
-# 创建目录结构
-INSTALL_DIR="/usr/local/frp"
-mkdir -p $INSTALL_DIR/{bin,conf,logs}
-cp $TMP_DIR/frp_${VERSION}_linux_amd64/frps $INSTALL_DIR/bin/
-chmod +x $INSTALL_DIR/bin/frps
-
-# 复制客户端文件以便管理
-cp $TMP_DIR/frp_${VERSION}_linux_amd64/frpc $INSTALL_DIR/bin/
-chmod +x $INSTALL_DIR/bin/frpc
-
-# 创建配置文件模板
-cat > $INSTALL_DIR/conf/frps.ini << EOF
+# 创建配置文件
+create_config() {
+    echo -e "${YELLOW}正在创建配置文件...${NC}"
+    
+    # 创建默认配置文件
+    cat > /etc/frp/frps.ini << EOF
 [common]
 bind_port = 7000
-token = your_token_here
+bind_addr = 0.0.0.0
+token = $(openssl rand -hex 16)
 
 dashboard_port = 7500
 dashboard_user = admin
-dashboard_pwd = admin
-EOF
+dashboard_pwd = $(openssl rand -hex 8)
 
-# 创建客户端配置文件模板
-cat > $INSTALL_DIR/conf/frpc.ini << EOF
-[common]
-server_addr = 127.0.0.1
-server_port = 7000
-token = your_token_here
+# 详细配置请参考: https://gofrp.org/docs/examples/tcp/
+# 更多配置选项请参考官方文档
 
-[ssh]
-type = tcp
-local_ip = 127.0.0.1
-local_port = 22
-remote_port = 6000
+log_file = /var/log/frp/frps.log
+log_level = info
+log_max_days = 3
 EOF
+    
+    echo -e "${GREEN}配置文件已创建: /etc/frp/frps.ini${NC}"
+    echo -e "${YELLOW}请根据需求修改配置文件${NC}"
+}
 
 # 创建systemd服务
-cat > /etc/systemd/system/frps.service << EOF
+create_service() {
+    echo -e "${YELLOW}正在创建systemd服务...${NC}"
+    
+    # 创建systemd服务文件
+    cat > /etc/systemd/system/frps.service << EOF
 [Unit]
 Description=Frp Server Service
-After=network.target
+After=network.target network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
-User=nobody
+User=root
+ExecStart=/usr/local/bin/frps -c /etc/frp/frps.ini
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=on-failure
 RestartSec=5s
-ExecStart=$INSTALL_DIR/bin/frps -c $INSTALL_DIR/conf/frps.ini
-ExecReload=/bin/kill -s HUP \$MAINPID
-StandardOutput=file:$INSTALL_DIR/logs/frps.log
-StandardError=file:$INSTALL_DIR/logs/frps_error.log
+LimitNOFILE=1048576
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=frps
 
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# 清理临时文件
-rm -rf "$TMP_DIR"
-
-# 启动服务
-systemctl daemon-reload
-systemctl enable frps
-systemctl start frps
-
-# 创建管理脚本
-cat > /usr/local/bin/frp << 'EOF'
-#!/bin/bash
-
-INSTALL_DIR="/usr/local/frp"
-SERVICE_TYPE="server"
-
-# 检测当前是server还是client
-if systemctl is-active --quiet frpc 2>/dev/null; then
-    SERVICE_TYPE="client"
-fi
-
-show_menu() {
-    echo "=============================="
-    echo " Frp 服务管理脚本 "
-    echo "=============================="
-    echo "当前服务模式: $SERVICE_TYPE"
-    echo "1. 启动 frp 服务"
-    echo "2. 停止 frp 服务"
-    echo "3. 重启 frp 服务"
-    echo "4. 查看服务状态"
-    echo "5. 重载服务配置"
-    echo "6. 显示安装目录"
-    echo "7. 卸载 frp 服务"
-    echo "8. 退出"
-    echo "=============================="
-}
-
-# 根据服务类型执行操作
-frp_action() {
-    local action=$1
-    local service_name="frps"
     
-    if [ "$SERVICE_TYPE" = "client" ]; then
-        service_name="frpc"
+    # 创建日志配置文件（如果使用syslog）
+    if [ -d /etc/rsyslog.d ]; then
+        cat > /etc/rsyslog.d/frps.conf << EOF
+if \$programname == 'frps' then /var/log/frp/frps.log
+& stop
+EOF
+        systemctl restart rsyslog
     fi
-    
-    systemctl $action $service_name
-}
-
-# 卸载frp服务
-uninstall_frp() {
-    echo "警告：此操作将卸载Frp服务！"
-    read -p "确定要卸载Frp服务吗？(y/N): " confirm
-    
-    if [ "$confirm" != "y" ] && [ "$confirm" != "Y" ]; then
-        echo "卸载操作已取消"
-        return
-    fi
-    
-    echo "正在停止服务..."
-    
-    # 停止并禁用服务
-    if systemctl is-active --quiet frps 2>/dev/null; then
-        systemctl stop frps
-        systemctl disable frps
-    fi
-    
-    if systemctl is-active --quiet frpc 2>/dev/null; then
-        systemctl stop frpc
-        systemctl disable frpc
-    fi
-    
-    # 删除服务文件
-    if [ -f /etc/systemd/system/frps.service ]; then
-        rm -f /etc/systemd/system/frps.service
-    fi
-    
-    if [ -f /etc/systemd/system/frpc.service ]; then
-        rm -f /etc/systemd/system/frpc.service
-    fi
-    
-    # 删除安装目录
-    if [ -d "$INSTALL_DIR" ]; then
-        rm -rf "$INSTALL_DIR"
-    fi
-    
-    # 删除管理脚本
-    rm -f /usr/local/bin/frp
     
     # 重载systemd
     systemctl daemon-reload
+    systemctl enable frps
     
-    echo "=============================="
-    echo "Frp 服务已卸载完成！"
-    echo "=============================="
-    echo "已删除以下内容："
-    echo "1. Frp 安装目录: $INSTALL_DIR"
-    echo "2. systemd 服务文件"
-    echo "3. 管理脚本"
-    echo "=============================="
+    echo -e "${GREEN}systemd服务已创建${NC}"
 }
 
-# 主程序
-case $1 in
-    [1-8]) 
-        choice=$1
-        ;;
-    *)
-        show_menu
-        read -p "请输入选项 (1-8): " choice
-        ;;
-esac
+# 创建管理脚本
+create_management_script() {
+    echo -e "${YELLOW}正在创建管理脚本...${NC}"
+    
+    cat > /usr/local/bin/frp << 'EOF'
+#!/bin/bash
 
-case $choice in
-    1)
-        frp_action "start"
-        echo "服务已启动"
-        ;;
-    2)
-        frp_action "stop"
-        echo "服务已停止"
-        ;;
-    3)
-        frp_action "restart"
-        echo "服务已重启"
-        ;;
-    4)
-        frp_action "status"
-        ;;
-    5)
-        systemctl daemon-reload
-        echo "服务配置已重载"
-        ;;
-    6)
-        echo "=============================="
-        echo "Frp 安装信息"
-        echo "=============================="
-        echo "安装目录: $INSTALL_DIR"
-        echo "配置文件: $INSTALL_DIR/conf"
-        echo "日志文件: $INSTALL_DIR/logs"
-        echo "可执行文件: $INSTALL_DIR/bin"
-        echo ""
-        echo "配置文件列表:"
-        ls -la $INSTALL_DIR/conf/
-        echo ""
-        echo "当前服务状态:"
-        if [ "$SERVICE_TYPE" = "server" ]; then
-            systemctl status frps --no-pager
-        else
-            systemctl status frpc --no-pager
-        fi
-        echo "=============================="
-        ;;
-    7)
-        uninstall_frp
-        ;;
-    8)
-        exit 0
-        ;;
-    *)
-        echo "无效选项！"
-        exit 1
-        ;;
-esac
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# 检查服务类型
+if systemctl is-active --quiet frps 2>/dev/null; then
+    SERVICE_NAME="frps"
+    CONFIG_FILE="/etc/frp/frps.ini"
+elif systemctl is-active --quiet frpc 2>/dev/null; then
+    SERVICE_NAME="frpc"
+    CONFIG_FILE="/etc/frp/frpc.ini"
+elif [ -f /etc/systemd/system/frps.service ]; then
+    SERVICE_NAME="frps"
+    CONFIG_FILE="/etc/frp/frps.ini"
+elif [ -f /etc/systemd/system/frpc.service ]; then
+    SERVICE_NAME="frpc"
+    CONFIG_FILE="/etc/frp/frpc.ini"
+else
+    echo -e "${RED}未找到frp服务${NC}"
+    exit 1
+fi
+
+show_menu() {
+    clear
+    echo -e "${BLUE}================================${NC}"
+    echo -e "${BLUE}      Frp 服务管理脚本         ${NC}"
+    echo -e "${BLUE}================================${NC}"
+    echo -e "服务: ${GREEN}${SERVICE_NAME}${NC}"
+    echo -e "配置文件: ${YELLOW}${CONFIG_FILE}${NC}"
+    echo -e "${BLUE}================================${NC}"
+    echo -e "1. ${GREEN}启动服务${NC}"
+    echo -e "2. ${RED}停止服务${NC}"
+    echo -e "3. ${YELLOW}重启服务${NC}"
+    echo -e "4. ${BLUE}重载配置并重启${NC}"
+    echo -e "5. 查看服务状态"
+    echo -e "6. 查看服务日志"
+    echo -e "7. 编辑配置文件"
+    echo -e "8. 重载systemd配置"
+    echo -e "9. 设置开机自启"
+    echo -e "10. 禁用开机自启"
+    echo -e "0. 退出"
+    echo -e "${BLUE}================================${NC}"
+}
+
+# 如果传入参数，直接执行对应操作
+if [ $# -gt 0 ]; then
+    case $1 in
+        1|start)
+            echo -e "${GREEN}启动 ${SERVICE_NAME}...${NC}"
+            systemctl start ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        2|stop)
+            echo -e "${RED}停止 ${SERVICE_NAME}...${NC}"
+            systemctl stop ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        3|restart)
+            echo -e "${YELLOW}重启 ${SERVICE_NAME}...${NC}"
+            systemctl restart ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        4|reload)
+            echo -e "${BLUE}重载配置并重启...${NC}"
+            systemctl daemon-reload
+            systemctl restart ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        5|status)
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        6|log)
+            journalctl -u ${SERVICE_NAME} -f
+            ;;
+        7|edit)
+            vi ${CONFIG_FILE}
+            ;;
+        8|daemon-reload)
+            systemctl daemon-reload
+            echo -e "${GREEN}systemd配置已重载${NC}"
+            ;;
+        9|enable)
+            systemctl enable ${SERVICE_NAME}
+            echo -e "${GREEN}已设置开机自启${NC}"
+            ;;
+        10|disable)
+            systemctl disable ${SERVICE_NAME}
+            echo -e "${RED}已禁用开机自启${NC}"
+            ;;
+        *)
+            echo -e "${RED}未知参数: $1${NC}"
+            echo -e "可用参数: start, stop, restart, reload, status, log, edit, daemon-reload, enable, disable"
+            ;;
+    esac
+    exit 0
+fi
+
+# 交互式菜单
+while true; do
+    show_menu
+    read -p "请选择操作 (0-10): " choice
+    
+    case $choice in
+        1)
+            echo -e "${GREEN}启动 ${SERVICE_NAME}...${NC}"
+            systemctl start ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        2)
+            echo -e "${RED}停止 ${SERVICE_NAME}...${NC}"
+            systemctl stop ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        3)
+            echo -e "${YELLOW}重启 ${SERVICE_NAME}...${NC}"
+            systemctl restart ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        4)
+            echo -e "${BLUE}重载配置并重启...${NC}"
+            systemctl daemon-reload
+            systemctl restart ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        5)
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        6)
+            journalctl -u ${SERVICE_NAME} -f
+            ;;
+        7)
+            ${EDITOR:-vi} ${CONFIG_FILE}
+            ;;
+        8)
+            systemctl daemon-reload
+            echo -e "${GREEN}systemd配置已重载${NC}"
+            ;;
+        9)
+            systemctl enable ${SERVICE_NAME}
+            echo -e "${GREEN}已设置开机自启${NC}"
+            ;;
+        10)
+            systemctl disable ${SERVICE_NAME}
+            echo -e "${RED}已禁用开机自启${NC}"
+            ;;
+        0)
+            echo -e "${BLUE}再见！${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}无效选择，请重新输入${NC}"
+            ;;
+    esac
+    
+    read -p "按回车键继续..."
+done
 EOF
+    
+    chmod +x /usr/local/bin/frp
+    echo -e "${GREEN}管理脚本已创建: /usr/local/bin/frp${NC}"
+}
 
-chmod +x /usr/local/bin/frp
+# 显示安装完成信息
+show_completion_info() {
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "${GREEN}      Frps 安装完成！                   ${NC}"
+    echo -e "${GREEN}========================================${NC}"
+    echo -e "管理命令: ${YELLOW}frp${NC} (交互式菜单)"
+    echo -e "快速命令:"
+    echo -e "  ${BLUE}frp start${NC}      # 启动服务"
+    echo -e "  ${BLUE}frp stop${NC}       # 停止服务"
+    echo -e "  ${BLUE}frp restart${NC}    # 重启服务"
+    echo -e "  ${BLUE}frp status${NC}     # 查看状态"
+    echo -e "  ${BLUE}frp reload${NC}     # 重载配置"
+    echo -e "配置文件: ${YELLOW}/etc/frp/frps.ini${NC}"
+    echo -e "日志文件: ${YELLOW}/var/log/frp/frps.log${NC}"
+    echo -e ""
+    echo -e "${YELLOW}请编辑配置文件: /etc/frp/frps.ini${NC}"
+    echo -e "${YELLOW}修改 token 和其他配置项${NC}"
+    echo -e ""
+    echo -e "${GREEN}启动服务命令: systemctl start frps${NC}"
+    echo -e "${GREEN}设置开机自启: systemctl enable frps${NC}"
+    echo -e "${GREEN}========================================${NC}"
+}
 
-echo "=============================="
-echo "Frps 安装完成！"
-echo "=============================="
-echo "安装信息:"
-echo "- 安装目录: $INSTALL_DIR"
-echo "- 配置文件: $INSTALL_DIR/conf/frps.ini"
-echo "- 日志目录: $INSTALL_DIR/logs"
-echo ""
-echo "管理命令:"
-echo "- 基本管理: frp"
-echo "- 直接命令: frp 1 (启动), frp 2 (停止), frp 3 (重启)"
-echo "- 查看状态: frp 4"
-echo "- 卸载: frp 7"
-echo ""
-echo "请修改配置文件: $INSTALL_DIR/conf/frps.ini"
-echo "然后执行: systemctl restart frps"
-echo "=============================="
-echo "防火墙设置 (如果需要):"
-echo "  # CentOS:"
-echo "  firewall-cmd --permanent --add-port=7000/tcp"
-echo "  firewall-cmd --permanent --add-port=7500/tcp"
-echo "  firewall-cmd --reload"
-echo ""
-echo "  # Debian/Ubuntu:"
-echo "  ufw allow 7000/tcp"
-echo "  ufw allow 7500/tcp"
-echo "  ufw reload"
-echo "=============================="
+# 主函数
+main() {
+    echo -e "${BLUE}开始安装 Frp 服务端...${NC}"
+    
+    check_root
+    detect_os
+    detect_arch
+    install_dependencies
+    install_frp
+    create_config
+    create_service
+    create_management_script
+    
+    echo -e "${GREEN}启动 Frp 服务...${NC}"
+    systemctl start frps
+    
+    show_completion_info
+}
+
+# 执行主函数
+main
