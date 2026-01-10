@@ -147,9 +147,6 @@ install_frp() {
 create_config() {
     echo -e "${YELLOW}正在创建配置文件...${NC}"
     
-    # 获取服务器IP
-    SERVER_IP=$(curl -s ifconfig.me 2>/dev/null || echo "your_server_ip")
-    
     # 创建默认配置文件
     cat > /etc/frp/frpc.ini << EOF
 [common]
@@ -237,6 +234,417 @@ EOF
     echo -e "${GREEN}systemd服务已创建${NC}"
 }
 
+# 创建管理脚本
+create_management_script() {
+    echo -e "${YELLOW}正在创建管理脚本...${NC}"
+    
+    cat > /usr/local/bin/frp << 'EOF'
+#!/bin/bash
+
+# 颜色定义
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m'
+
+# 检查服务类型
+if systemctl is-active --quiet frps 2>/dev/null; then
+    SERVICE_NAME="frps"
+    CONFIG_FILE="/etc/frp/frps.ini"
+elif systemctl is-active --quiet frpc 2>/dev/null; then
+    SERVICE_NAME="frpc"
+    CONFIG_FILE="/etc/frp/frpc.ini"
+elif [ -f /etc/systemd/system/frps.service ]; then
+    SERVICE_NAME="frps"
+    CONFIG_FILE="/etc/frp/frps.ini"
+elif [ -f /etc/systemd/system/frpc.service ]; then
+    SERVICE_NAME="frpc"
+    CONFIG_FILE="/etc/frp/frpc.ini"
+else
+    echo -e "${RED}未找到frp服务${NC}"
+    exit 1
+fi
+
+show_menu() {
+    clear
+    echo -e "${BLUE}================================${NC}"
+    echo -e "${BLUE}      Frp 服务管理脚本         ${NC}"
+    echo -e "${BLUE}================================${NC}"
+    echo -e "服务: ${GREEN}${SERVICE_NAME}${NC}"
+    echo -e "配置文件: ${YELLOW}${CONFIG_FILE}${NC}"
+    echo -e "${BLUE}================================${NC}"
+    echo -e "1. ${GREEN}启动服务${NC}"
+    echo -e "2. ${RED}停止服务${NC}"
+    echo -e "3. ${YELLOW}重启服务${NC}"
+    echo -e "4. ${BLUE}重载配置并重启${NC}"
+    echo -e "5. 查看服务状态"
+    echo -e "6. 查看服务日志"
+    echo -e "7. 编辑配置文件"
+    echo -e "8. 重载systemd配置"
+    echo -e "9. 设置开机自启"
+    echo -e "10. 禁用开机自启"
+	echo -e "11. 卸载 ${GREEN}${SERVICE_NAME}${NC}"
+    echo -e "0. 退出"
+    echo -e "${BLUE}================================${NC}"
+}
+
+# 如果传入参数，直接执行对应操作
+if [ $# -gt 0 ]; then
+    case $1 in
+        1|start)
+            echo -e "${GREEN}启动 ${SERVICE_NAME}...${NC}"
+            systemctl start ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        2|stop)
+            echo -e "${RED}停止 ${SERVICE_NAME}...${NC}"
+            systemctl stop ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        3|restart)
+            echo -e "${YELLOW}重启 ${SERVICE_NAME}...${NC}"
+            systemctl restart ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        4|reload)
+            echo -e "${BLUE}重载配置并重启...${NC}"
+            systemctl daemon-reload
+            systemctl restart ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        5|status)
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        6|log)
+            journalctl -u ${SERVICE_NAME} -f
+            ;;
+        7|edit)
+            vi ${CONFIG_FILE}
+            ;;
+        8|daemon-reload)
+            systemctl daemon-reload
+            echo -e "${GREEN}systemd配置已重载${NC}"
+            ;;
+        9|enable)
+            systemctl enable ${SERVICE_NAME}
+            echo -e "${GREEN}已设置开机自启${NC}"
+            ;;
+        10|disable)
+            systemctl disable ${SERVICE_NAME}
+            echo -e "${RED}已禁用开机自启${NC}"
+            ;;
+        11|uninstall)
+			echo -e "${YELLOW}================================${NC}"
+			echo -e "${YELLOW}      Frp 卸载程序             ${NC}"
+			echo -e "${YELLOW}================================${NC}"
+			echo -e "${RED}警告：此操作将完全移除 frp 服务${NC}"
+			echo -e ""
+			echo -e "将移除以下内容："
+			echo -e "1. systemd 服务 (frpc)"
+			echo -e "2. 二进制文件 (/usr/local/bin/frpc)"
+			echo -e "3. FRP 程序文件 (/usr/local/frp/)"
+			echo -e "4. 配置文件 (/etc/frp/)"
+			echo -e "5. 管理脚本 (/usr/local/bin/frp)"
+			echo -e "6. 日志文件 (/var/log/frp/)"
+			echo -e ""
+			
+			read -p "您确定要卸载 frp 吗？(y/N): " -n 1 -r
+			echo ""
+			
+			if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+				echo -e "${GREEN}卸载已取消${NC}"
+				exit 0
+			fi
+			
+			echo -e "${YELLOW}开始卸载 frp...${NC}"
+			
+			# 停止并禁用服务
+			if systemctl is-active --quiet frpc 2>/dev/null; then
+				echo -e "${YELLOW}停止 frp 服务...${NC}"
+				systemctl stop frpc
+			fi
+			
+			if systemctl is-enabled --quiet frpc 2>/dev/null; then
+				echo -e "${YELLOW}禁用 frp 服务自启动...${NC}"
+				systemctl disable frpc
+			fi
+			
+			# 移除systemd服务文件
+			if [ -f /etc/systemd/system/frpc.service ]; then
+				echo -e "${YELLOW}删除 systemd 服务文件...${NC}"
+				rm -f /etc/systemd/system/frpc.service
+				systemctl daemon-reload
+			fi
+			
+			# 移除rsyslog配置
+			if [ -f /etc/rsyslog.d/frpc.conf ]; then
+				echo -e "${YELLOW}删除 rsyslog 配置...${NC}"
+				rm -f /etc/rsyslog.d/frpc.conf
+				systemctl restart rsyslog 2>/dev/null || true
+			fi
+			
+			# 删除二进制文件
+			if [ -f /usr/local/bin/frpc ]; then
+				echo -e "${YELLOW}删除 frp 二进制文件...${NC}"
+				rm -f /usr/local/bin/frpc
+			fi
+			
+			# 删除FRP程序目录
+			if [ -d /usr/local/frp ]; then
+				echo -e "${YELLOW}删除 frp 程序目录...${NC}"
+				rm -rf /usr/local/frp
+			fi
+			
+			# 删除配置文件目录
+			if [ -d /etc/frp ]; then
+				echo -e "${YELLOW}删除配置文件目录...${NC}"
+				rm -rf /etc/frp
+			fi
+			
+			# 删除日志目录
+			if [ -d /var/log/frp ]; then
+				echo -e "${YELLOW}删除日志目录...${NC}"
+				rm -rf /var/log/frp
+			fi
+			
+			# 删除管理脚本
+			if [ -f /usr/local/bin/frp ]; then
+				echo -e "${YELLOW}删除管理脚本...${NC}"
+				rm -f /usr/local/bin/frp
+			fi
+			
+			# 删除临时文件
+			if [ -f /tmp/frp.tar.gz ]; then
+				echo -e "${YELLOW}清理临时文件...${NC}"
+				rm -f /tmp/frp.tar.gz
+			fi
+			
+			# 检查是否还有其他frp相关文件
+			echo -e "${YELLOW}检查剩余文件...${NC}"
+			
+			# 检查frpc相关文件（如果存在）
+			if [ -f /usr/local/bin/frpc ]; then
+				echo -e "${YELLOW}检测到 frpc 客户端文件，是否删除？${NC}"
+				read -p "删除 frpc 文件？(y/N): " -n 1 -r
+				echo ""
+				if [[ $REPLY =~ ^[Yy]$ ]]; then
+					rm -f /usr/local/bin/frpc
+					echo -e "${GREEN}已删除 frpc 客户端${NC}"
+				fi
+			fi
+			
+			if [ -f /etc/systemd/system/frpc.service ]; then
+				systemctl stop frpc 2>/dev/null || true
+				systemctl disable frpc 2>/dev/null || true
+				rm -f /etc/systemd/system/frpc.service
+				echo -e "${GREEN}已删除 frpc 服务${NC}"
+			fi
+			
+			echo -e "${GREEN}================================${NC}"
+			echo -e "${GREEN}      Frp 卸载完成！           ${NC}"
+			echo -e "${GREEN}================================${NC}"
+			echo -e ""
+			echo -e "建议执行以下命令清理系统："
+			echo -e "1. ${BLUE}systemctl daemon-reload${NC}"
+			echo -e "2. ${BLUE}systemctl reset-failed${NC}"
+			echo -e "3. ${BLUE}journalctl --vacuum-time=1d${NC} (清理旧日志)"
+			echo -e ""
+			echo -e "${YELLOW}注意：用户配置文件、日志等已永久删除${NC}"
+			exit 0
+            ;;
+        *)
+            echo -e "${RED}未知参数: $1${NC}"
+            echo -e "可用参数: start, stop, restart, reload, status, log, edit, daemon-reload, enable, disable, uninstall"
+            ;;
+    esac
+    exit 0
+fi
+
+# 交互式菜单
+while true; do
+    show_menu
+    read -p "请选择操作 (0-10): " choice
+    
+    case $choice in
+        1)
+            echo -e "${GREEN}启动 ${SERVICE_NAME}...${NC}"
+            systemctl start ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        2)
+            echo -e "${RED}停止 ${SERVICE_NAME}...${NC}"
+            systemctl stop ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        3)
+            echo -e "${YELLOW}重启 ${SERVICE_NAME}...${NC}"
+            systemctl restart ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        4)
+            echo -e "${BLUE}重载配置并重启...${NC}"
+            systemctl daemon-reload
+            systemctl restart ${SERVICE_NAME}
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        5)
+            systemctl status ${SERVICE_NAME} --no-pager
+            ;;
+        6)
+            journalctl -u ${SERVICE_NAME} -f
+            ;;
+        7)
+            ${EDITOR:-vi} ${CONFIG_FILE}
+            ;;
+        8)
+            systemctl daemon-reload
+            echo -e "${GREEN}systemd配置已重载${NC}"
+            ;;
+        9)
+            systemctl enable ${SERVICE_NAME}
+            echo -e "${GREEN}已设置开机自启${NC}"
+            ;;
+        10)
+            systemctl disable ${SERVICE_NAME}
+            echo -e "${RED}已禁用开机自启${NC}"
+            ;;
+        11)
+			echo -e "${YELLOW}================================${NC}"
+			echo -e "${YELLOW}      Frp 卸载程序             ${NC}"
+			echo -e "${YELLOW}================================${NC}"
+			echo -e "${RED}警告：此操作将完全移除 frp 服务${NC}"
+			echo -e ""
+			echo -e "将移除以下内容："
+			echo -e "1. systemd 服务 (frpc)"
+			echo -e "2. 二进制文件 (/usr/local/bin/frpc)"
+			echo -e "3. FRP 程序文件 (/usr/local/frp/)"
+			echo -e "4. 配置文件 (/etc/frp/)"
+			echo -e "5. 管理脚本 (/usr/local/bin/frp)"
+			echo -e "6. 日志文件 (/var/log/frp/)"
+			echo -e ""
+			
+			read -p "您确定要卸载 frp 吗？(y/N): " -n 1 -r
+			echo ""
+			
+			if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+				echo -e "${GREEN}卸载已取消${NC}"
+				exit 0
+			fi
+			
+			echo -e "${YELLOW}开始卸载 frp...${NC}"
+			
+			# 停止并禁用服务
+			if systemctl is-active --quiet frpc 2>/dev/null; then
+				echo -e "${YELLOW}停止 frp 服务...${NC}"
+				systemctl stop frpc
+			fi
+			
+			if systemctl is-enabled --quiet frpc 2>/dev/null; then
+				echo -e "${YELLOW}禁用 frp 服务自启动...${NC}"
+				systemctl disable frpc
+			fi
+			
+			# 移除systemd服务文件
+			if [ -f /etc/systemd/system/frpc.service ]; then
+				echo -e "${YELLOW}删除 systemd 服务文件...${NC}"
+				rm -f /etc/systemd/system/frpc.service
+				systemctl daemon-reload
+			fi
+			
+			# 移除rsyslog配置
+			if [ -f /etc/rsyslog.d/frpc.conf ]; then
+				echo -e "${YELLOW}删除 rsyslog 配置...${NC}"
+				rm -f /etc/rsyslog.d/frpc.conf
+				systemctl restart rsyslog 2>/dev/null || true
+			fi
+			
+			# 删除二进制文件
+			if [ -f /usr/local/bin/frpc ]; then
+				echo -e "${YELLOW}删除 frp 二进制文件...${NC}"
+				rm -f /usr/local/bin/frpc
+			fi
+			
+			# 删除FRP程序目录
+			if [ -d /usr/local/frp ]; then
+				echo -e "${YELLOW}删除 frp 程序目录...${NC}"
+				rm -rf /usr/local/frp
+			fi
+			
+			# 删除配置文件目录
+			if [ -d /etc/frp ]; then
+				echo -e "${YELLOW}删除配置文件目录...${NC}"
+				rm -rf /etc/frp
+			fi
+			
+			# 删除日志目录
+			if [ -d /var/log/frp ]; then
+				echo -e "${YELLOW}删除日志目录...${NC}"
+				rm -rf /var/log/frp
+			fi
+			
+			# 删除管理脚本
+			if [ -f /usr/local/bin/frp ]; then
+				echo -e "${YELLOW}删除管理脚本...${NC}"
+				rm -f /usr/local/bin/frp
+			fi
+			
+			# 删除临时文件
+			if [ -f /tmp/frp.tar.gz ]; then
+				echo -e "${YELLOW}清理临时文件...${NC}"
+				rm -f /tmp/frp.tar.gz
+			fi
+			
+			# 检查是否还有其他frp相关文件
+			echo -e "${YELLOW}检查剩余文件...${NC}"
+			
+			# 检查frpc相关文件（如果存在）
+			if [ -f /usr/local/bin/frpc ]; then
+				echo -e "${YELLOW}检测到 frpc 客户端文件，是否删除？${NC}"
+				read -p "删除 frpc 文件？(y/N): " -n 1 -r
+				echo ""
+				if [[ $REPLY =~ ^[Yy]$ ]]; then
+					rm -f /usr/local/bin/frpc
+					echo -e "${GREEN}已删除 frpc 客户端${NC}"
+				fi
+			fi
+			
+			if [ -f /etc/systemd/system/frpc.service ]; then
+				systemctl stop frpc 2>/dev/null || true
+				systemctl disable frpc 2>/dev/null || true
+				rm -f /etc/systemd/system/frpc.service
+				echo -e "${GREEN}已删除 frpc 服务${NC}"
+			fi
+			
+			echo -e "${GREEN}================================${NC}"
+			echo -e "${GREEN}      Frp 卸载完成！           ${NC}"
+			echo -e "${GREEN}================================${NC}"
+			echo -e ""
+			echo -e "建议执行以下命令清理系统："
+			echo -e "1. ${BLUE}systemctl daemon-reload${NC}"
+			echo -e "2. ${BLUE}systemctl reset-failed${NC}"
+			echo -e "3. ${BLUE}journalctl --vacuum-time=1d${NC} (清理旧日志)"
+			echo -e ""
+			echo -e "${YELLOW}注意：用户配置文件、日志等已永久删除${NC}"
+			exit 0
+            ;;
+        0)
+            echo -e "${BLUE}再见！${NC}"
+            exit 0
+            ;;
+        *)
+            echo -e "${RED}无效选择，请重新输入${NC}"
+            ;;
+    esac
+    
+    read -p "按回车键继续..."
+done
+EOF
+    
+    chmod +x /usr/local/bin/frp
+    echo -e "${GREEN}管理脚本已创建: /usr/local/bin/frp${NC}"
+}
+
 # 显示安装完成信息
 show_completion_info() {
     echo -e "${GREEN}========================================${NC}"
@@ -253,7 +661,7 @@ show_completion_info() {
     echo -e "日志文件: ${YELLOW}/var/log/frp/frpc.log${NC}"
     echo -e ""
     echo -e "${YELLOW}请编辑配置文件: /etc/frp/frpc.ini${NC}"
-    echo -e "${YELLOW}修改 server_addr, token 和其他配置项${NC}"
+    echo -e "${YELLOW}修改 token 和其他配置项${NC}"
     echo -e ""
     echo -e "${GREEN}启动服务命令: systemctl start frpc${NC}"
     echo -e "${GREEN}设置开机自启: systemctl enable frpc${NC}"
@@ -262,7 +670,7 @@ show_completion_info() {
 
 # 主函数
 main() {
-    echo -e "${BLUE}开始安装 Frp 客户端...${NC}"
+    echo -e "${BLUE}开始安装 Frp 服务端...${NC}"
     
     check_root
     detect_os
@@ -271,29 +679,12 @@ main() {
     install_frp
     create_config
     create_service
+    create_management_script
     
-    # 管理脚本已包含在服务端脚本中，这里不需要重复创建
-    # 但会检查是否已存在，不存在则创建
-    if [ ! -f /usr/local/bin/frp ]; then
-        # 从服务端脚本中复制管理脚本逻辑
-        create_management_script
-    fi
-    
-    echo -e "${GREEN}启动 Frp 客户端...${NC}"
+    echo -e "${GREEN}启动 Frp 服务...${NC}"
     systemctl start frpc
     
     show_completion_info
-}
-
-# 创建管理脚本（与服务端共享）
-create_management_script() {
-    cat > /usr/local/bin/frp << 'EOF'
-#!/bin/bash
-# 管理脚本代码与服务端相同
-# 由于篇幅限制，这里省略重复代码
-# 实际脚本中应包含完整的管理脚本
-EOF
-    chmod +x /usr/local/bin/frp
 }
 
 # 执行主函数
