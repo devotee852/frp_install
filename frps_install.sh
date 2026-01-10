@@ -1,4 +1,4 @@
-﻿#!/bin/bash
+#!/bin/bash
 
 # 检查root权限
 if [ "$(id -u)" != "0" ]; then
