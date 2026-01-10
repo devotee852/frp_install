@@ -6,6 +6,61 @@ if [ "$(id -u)" != "0" ]; then
     exit 1
 fi
 
+# 识别系统类型
+detect_os() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        OS=$ID
+        OS_VERSION=$VERSION_ID
+    elif [ -f /etc/centos-release ]; then
+        OS="centos"
+        OS_VERSION=$(cat /etc/centos-release | tr -dc '0-9.' | cut -d '.' -f1)
+    else
+        OS=$(uname -s)
+    fi
+    
+    echo -e "${BLUE}检测到系统: ${OS} ${OS_VERSION}${NC}"
+}
+
+# 检测系统架构
+detect_arch() {
+    ARCH=$(uname -m)
+    case $ARCH in
+        x86_64)
+            FRP_ARCH="amd64"
+            ;;
+        aarch64|arm64)
+            FRP_ARCH="arm64"
+            ;;
+        armv7l|armv8l)
+            FRP_ARCH="arm"
+            ;;
+        i386|i686)
+            FRP_ARCH="386"
+            ;;
+        mips)
+            FRP_ARCH="mips"
+            ;;
+        mips64)
+            FRP_ARCH="mips64"
+            ;;
+        mips64el)
+            FRP_ARCH="mips64le"
+            ;;
+        mipsel)
+            FRP_ARCH="mipsle"
+            ;;
+        s390x)
+            FRP_ARCH="s390x"
+            ;;
+        *)
+            echo -e "${RED}不支持的架构: $ARCH${NC}"
+            exit 1
+            ;;
+    esac
+    echo -e "${BLUE}系统架构: $ARCH -> frp架构: $FRP_ARCH${NC}"
+}
+
 # 系统检测
 if [ -f /etc/redhat-release ]; then
     SYSTEM="centos"
@@ -26,7 +81,10 @@ fi
 
 # 下载和解压Frp
 VERSION="0.43.0"
-URL="https://github.com/fatedier/frp/releases/download/v${VERSION}/frp_${VERSION}_linux_amd64.tar.gz"
+#URL="https://github.com/fatedier/frp/releases/download/v${VERSION}/frp_${VERSION}_linux_amd64.tar.gz"
+
+URL="https://github.com/fatedier/frp/releases/download/v${FRP_VERSION}/frp_${FRP_VERSION}_linux_${FRP_ARCH}.tar.gz"
+
 TMP_DIR=$(mktemp -d)
 wget -qO "$TMP_DIR/frp.tar.gz" "$URL"
 tar xzf "$TMP_DIR/frp.tar.gz" -C "$TMP_DIR"
