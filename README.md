@@ -1,6 +1,4 @@
-# frp_install v1.1
-
-Frps与Frpc一键安装脚本
+# frp一键安装脚本 v1.1
 
 Frps：
 
