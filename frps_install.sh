@@ -263,7 +263,7 @@ show_menu() {
     echo -e "8. 重载systemd配置"
     echo -e "9. 设置开机自启"
     echo -e "10. 禁用开机自启"
-	echo -e "11. 禁用开机自启"
+	echo -e "11. 卸载 ${GREEN}${SERVICE_NAME}${NC}"
     echo -e "0. 退出"
     echo -e "${BLUE}================================${NC}"
 }
