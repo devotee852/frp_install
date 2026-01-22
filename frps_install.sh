@@ -250,7 +250,7 @@ fi
 show_menu() {
     clear
     echo -e "${BLUE}================================${NC}"
-    echo -e "${BLUE}      Frp 服务管理脚本         ${NC}"
+    echo -e "${BLUE}      Frp 服务管理脚本 v1.1         ${NC}"
     echo -e "${BLUE}================================${NC}"
     echo -e "服务: ${GREEN}${SERVICE_NAME}${NC}"
     echo -e "配置文件: ${YELLOW}${CONFIG_FILE}${NC}"
