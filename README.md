@@ -9,6 +9,8 @@ wget https://raw.githubusercontent.com/devotee852/frp_install/main/frps_install.
 wget https://gh-proxy.org/https://raw.githubusercontent.com/devotee852/frp_install/main/frps_install.sh && chmod +x frps_install.sh && sudo ./frps_install.sh
 
 =========================================================================================================================================
+
+
 Frpc：
 
 wget https://raw.githubusercontent.com/devotee852/frp_install/main/frpc_install.sh && chmod +x frpc_install.sh && sudo ./frpc_install.sh
